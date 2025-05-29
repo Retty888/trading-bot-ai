@@ -8,7 +8,7 @@ def format_signals_vertical(signals):
             f"Точка входа: {signal['entry']}\n"
             f"Stop Loss: {signal['stop_loss']}\n"
             f"Take Profit: {signal['take_profit']}\n"
-            f"Риск: {signal['risk']}\n"
+            f"Риск: {signal.get('risk', 'n/a')}\n"
             f"Оценка: {signal['confidence']}\n"
         )
         formatted.append(entry)

@@ -29,4 +29,15 @@ def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "
             df = fetch_klines(symbol, interval)
             if not df.empty:
                 all_data[symbol][interval] = df
+    
+    for sym in all_data:
+        for tf in all_data[sym]:
+            df_len = len(all_data[sym][tf])
+            if df_len == 0:
+                print(f"[⚠️] {sym} {tf}: Данные отсутствуют!")
+            elif df_len < 50:
+                print(f"[⚠️] {sym} {tf}: Слишком мало данных ({df_len} строк) — индикаторы могут не работать.")
+            else:
+                print(f"[✅] {sym} {tf}: Загружено {df_len} строк.")
+
     return all_data
