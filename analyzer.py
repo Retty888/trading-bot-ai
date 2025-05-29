@@ -1,49 +1,24 @@
 
-import openai
-from config import OPENAI_API_KEY, GPT4O_MODEL
+from data_fetcher import fetch_all_intervals
+from analysis_utils import generate_trade_ideas
+from formatting import format_signals_vertical
 
-openai.api_key = OPENAI_API_KEY
+def analyze_market(candles_dict, news=None, scalp_mode=False):
+    signals = generate_trade_ideas(candles_dict, scalp_mode=scalp_mode)
+    summary_line = "📈 Сигналы по стратегии 'скальпинг' на основе технического анализа:" if scalp_mode else "📶 Сигналы входа:"
+    return summary_line, format_signals_vertical(signals)
 
-def prepare_prompt(candles_dict, news_list, aggressive=False, signal_mode=False):
-    lines = []
+async def run_scalp_analysis(symbols=None):
+    if symbols is None:
+        symbols = ["ETHUSDT", "BTCUSDT", "SUIUSDT"]
+    candles_dict = fetch_all_intervals(symbols, intervals=["1m", "5m", "15m"])
+    result = analyze_market(candles_dict, scalp_mode=True)
+    return result
 
-    if signal_mode:
-        lines.append(
-            "📶 Signal Mode Request:\n"
-            "Generate only active, high-confidence trading signals across major crypto pairs.\n"
-            "For each signal, return the following structured format as a table:\n"
-            "| Symbol | Direction | Entry | Stop-Loss | Take-Profit | Risk Level |\n"
-            "|--------|-----------|-------|-----------|-------------|------------|\n"
-            "Include only assets with clear signals within the current or next 1 hour.\n"
-            "Be concise. No explanations. If no strong signals — say so clearly.\n"
-        )
-    elif aggressive:
-        lines.append("⚠️ Aggressive Analysis Mode: focus on risky/high-reward signals.")
-    else:
-        lines.append("🧠 Standard Market Analysis:")
+def run_signals_analysis():
+    candles_dict = fetch_all_intervals(["ETHUSDT", "BTCUSDT", "SUIUSDT"], intervals=["5m", "1h", "4h"], lookback=300)
+    return analyze_market(candles_dict)
 
-    for interval, candles in candles_dict.items():
-        lines.append(f"\n--- {interval} candles ---")
-        for c in candles:
-            if isinstance(c, dict):
-                lines.append(
-                    f"Time: {c['time']}, Open: {c['open']}, High: {c['high']}, Low: {c['low']}, Close: {c['close']}, Volume: {c['volume']}"
-                )
-
-    lines.append("\n--- News ---")
-    for n in news_list:
-        if isinstance(n, dict):
-            lines.append(f"{n['published_at']} - {n['title']}")
-
-    return "\n".join(lines)
-
-def analyze_market(candles_dict, news_list, model=GPT4O_MODEL, aggressive=False, signal_mode=False):
-    prompt = prepare_prompt(candles_dict, news_list, aggressive=aggressive, signal_mode=signal_mode)
-    try:
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Error during analysis: {str(e)}"
+async def run_swing_analysis():
+    candles_dict = fetch_all_intervals(["ETHUSDT", "BTCUSDT", "SUIUSDT"], intervals=["1d", "4h"], lookback=400)
+    return analyze_market(candles_dict)

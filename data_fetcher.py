@@ -1,38 +1,32 @@
+
 import requests
 import pandas as pd
-from config import BINANCE_API_BASE, PAIR, INTERVALS, LIMITS
+from binance.client import Client
+from config import BINANCE_API_KEY, BINANCE_API_SECRET
 
-def fetch_klines(symbol: str, interval: str, limit: int) -> pd.DataFrame:
-    url = f"{BINANCE_API_BASE}/api/v3/klines"
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-    response = requests.get(url, params=params)
-    response.raise_for_status()
-    data = response.json()
+client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
-    df = pd.DataFrame(data, columns=[
-        "timestamp", "open", "high", "low", "close", "volume",
-        "close_time", "quote_asset_volume", "number_of_trades",
-        "taker_buy_base_volume", "taker_buy_quote_volume", "ignore"
-    ])
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
-    df.set_index("timestamp", inplace=True)
-    df = df.astype({
-        "open": "float",
-        "high": "float",
-        "low": "float",
-        "close": "float",
-        "volume": "float"
-    })
-    return df[["open", "high", "low", "close", "volume"]]
+def fetch_klines(symbol, interval, limit=1000):
+    try:
+        klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+        return pd.DataFrame([{
+            "time": k[0],
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5])
+        } for k in klines])
+    except Exception as e:
+        print(f"Error fetching klines for {symbol} {interval}: {e}")
+        return pd.DataFrame()
 
-def fetch_all_intervals() -> dict:
+def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "15m", "1h", "4h"]):
     all_data = {}
-    for label, interval in INTERVALS.items():
-        print(f"📥 Загрузка данных: {label}")
-        data = fetch_klines(PAIR, interval, LIMITS[label])
-        all_data[label] = data
+    for symbol in symbols:
+        all_data[symbol] = {}
+        for interval in intervals:
+            df = fetch_klines(symbol, interval)
+            if not df.empty:
+                all_data[symbol][interval] = df
     return all_data

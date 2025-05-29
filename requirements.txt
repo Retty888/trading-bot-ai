@@ -1,4 +1,12 @@
-requests
-pandas
+python-telegram-bot==20.3
+openai==0.28.1
+requests==2.31.0
+pandas==1.5.3
+python-binance==1.0.17
+python-telegram-bot==20.3
 openai
-python-telegram-bot
+ta
+pandas
+numpy
+requests
+python-dotenv
