@@ -11,5 +11,9 @@ def format_signals_vertical(signals):
             f"Риск: {signal.get('risk', 'n/a')}\n"
             f"Оценка: {signal['confidence']}\n"
         )
+        if 'score' in signal:
+            entry += f"Score: {signal['score']}/7\n"
+        if 'reason' in signal:
+            entry += f"Причина: {signal['reason']}\n"
         formatted.append(entry)
     return "\n\n".join(formatted)

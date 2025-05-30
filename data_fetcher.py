@@ -29,7 +29,7 @@ def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "
             df = fetch_klines(symbol, interval)
             if not df.empty:
                 all_data[symbol][interval] = df
-    
+
     for sym in all_data:
         for tf in all_data[sym]:
             df_len = len(all_data[sym][tf])
@@ -41,3 +41,6 @@ def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "
                 print(f"[✅] {sym} {tf}: Загружено {df_len} строк.")
 
     return all_data
+
+def fetch_candles_for_symbol(symbol, interval, limit=1000):
+    return fetch_klines(symbol, interval, limit)
