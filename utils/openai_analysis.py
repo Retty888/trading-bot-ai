@@ -1,5 +1,6 @@
 import requests
 from datetime import datetime, timedelta
+from indicators.vumanchu_cipher import compute_vumanchu
 
 def get_openai_usage(api_key):
     try:
@@ -49,4 +50,4 @@ def get_openai_analysis(prompt: str) -> str:
         return response.choices[0].message['content'].strip()
     except Exception as e:
         print(f"[AI ERROR] {e}")
-        return "AI анализ недоступен"
+        return "❌ AI анализ временно недоступен"

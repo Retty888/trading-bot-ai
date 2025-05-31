@@ -1,8 +1,10 @@
-
 import requests
 import pandas as pd
+import os
 from binance.client import Client
 from config import BINANCE_API_KEY, BINANCE_API_SECRET
+from utils.candle_storage import save_candles, load_candles
+from datetime import datetime, timedelta
 
 client = Client(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
 
@@ -21,12 +23,42 @@ def fetch_klines(symbol, interval, limit=1000):
         print(f"Error fetching klines for {symbol} {interval}: {e}")
         return pd.DataFrame()
 
-def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "15m", "1h", "4h"]):
+def fetch_candles_for_symbol(symbol, interval="5m", limit=1000):
+    try:
+        os.makedirs("candle_data", exist_ok=True)
+
+        df = load_candles(symbol, interval)
+        if not df.empty:
+            last_time = pd.to_datetime(df['time'].max(), unit='ms')
+            if datetime.utcnow() - last_time < timedelta(minutes=5):
+                print(f"[📂] Используем локальные свечи для {symbol} ({interval})")
+                return df.tail(limit)
+
+        df = fetch_klines(symbol, interval, limit=limit)
+        print(f"[DEBUG] Получено {len(df)} строк")
+        if not df.empty:
+            save_candles(symbol, df, interval)
+            print(f"[🌐] Скачано и сохранено {len(df)} свечей для {symbol} ({interval})")
+        else:
+            print(f"[⚠️] Нет данных от Binance для {symbol} ({interval})")
+
+        return df
+
+    except Exception as e:
+        print(f"[❌] Ошибка в fetch_candles_for_symbol: {e}")
+        return pd.DataFrame()
+
+def fetch_all_intervals(symbols=None, intervals=None):
+    if symbols is None:
+        symbols = ["ETHUSDT", "BTCUSDT"]
+    if intervals is None:
+        intervals = ["1m", "5m", "15m", "1h", "4h"]
+
     all_data = {}
     for symbol in symbols:
         all_data[symbol] = {}
         for interval in intervals:
-            df = fetch_klines(symbol, interval)
+            df = fetch_candles_for_symbol(symbol, interval)  # ✅ использует кэш
             if not df.empty:
                 all_data[symbol][interval] = df
 
@@ -41,6 +73,3 @@ def fetch_all_intervals(symbols=["ETHUSDT", "BTCUSDT"], intervals=["1m", "5m", "
                 print(f"[✅] {sym} {tf}: Загружено {df_len} строк.")
 
     return all_data
-
-def fetch_candles_for_symbol(symbol, interval, limit=1000):
-    return fetch_klines(symbol, interval, limit)
