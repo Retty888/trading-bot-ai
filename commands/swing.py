@@ -2,9 +2,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from analyzer import run_swing_analysis
 from formatting import format_signals_vertical
-import csv
-import os
+from utils.trade_logger import log_signal
+from datetime import datetime
 
+# 🎯 Команда /swing — сигналы для свинг-трейдинга (1h, 4h, 1d)
 async def handle_swing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         summary_line, signals = await run_swing_analysis()
@@ -18,26 +19,17 @@ async def handle_swing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         formatted = format_signals_vertical(signals, strategy_name="Swing")
         await update.message.reply_text(f"{summary_line}\n\n{formatted}", parse_mode="HTML")
 
-        # === Логгирование сигналов ===
-        log_path = "signal_log.csv"
-        log_fields = ["timestamp", "symbol", "direction", "entry", "stop_loss", "take_profit", "confidence", "score", "reasons"]
-
+        # ✅ Логгирование в полном формате
         for signal in signals:
-            with open(log_path, mode='a', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=log_fields)
-                if file.tell() == 0:
-                    writer.writeheader()
-                writer.writerow({
-            "timestamp": datetime.utcnow().isoformat(),  # ← добавлено время UTC
-            "symbol": signal["symbol"],
-            "direction": signal["direction"],
-            "entry": signal["entry"],
-            "stop_loss": signal["stop_loss"],
-            "take_profit": signal["take_profit"],
-            "confidence": signal["confidence"],
-            "score": signal["score"],
-            "reasons": "; ".join(signal["reasons"]) if isinstance(signal["reasons"], list) else signal["reasons"]
-        })
+            signal.update({
+                "timestamp": signal.get("timestamp", datetime.utcnow().isoformat()),
+                "timeframe": signal.get("timeframe", "1h"),  # по умолчанию
+                "signal_score": signal.get("signal_score", 4),
+                "quality_score": signal.get("quality_score", 0),
+                "weak": signal.get("weak", False),
+                "result": signal.get("result", "")
+            })
+            log_signal(signal)
 
     except Exception as e:
         print(f"[❌] Ошибка в handle_swing: {e}")

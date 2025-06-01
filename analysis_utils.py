@@ -1,226 +1,159 @@
-
-# analysis_utils.py
 import pandas as pd
 import numpy as np
 import traceback
 from ta.trend import EMAIndicator, MACD, ADXIndicator
-from ta.momentum import RSIIndicator, StochRSIIndicator
+from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 from data_fetcher import fetch_candles_for_symbol
 from utils.openai_analysis import get_openai_analysis
-from utils.trade_logger import log_signal  # ← ДОБАВЬ СЮДА, не внутрь try!
-from indicators.vumanchu_cipher import compute_vumanchu
+from datetime import datetime
+from utils.generate_pending_trade_ideas import generate_pending_trade_ideas
+from utils.plot_signal_chart import plot_trade_signal
+from utils.signal_ranker import rank_signal
 
-
-def calculate_obv(df):
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['close'].iloc[i - 1]:
-            obv.append(obv[-1] + df['volume'].iloc[i])
-        elif df['close'].iloc[i] < df['close'].iloc[i - 1]:
-            obv.append(obv[-1] - df['volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    return obv
-
-def detect_candle_pattern(row):
-    body = abs(row['close'] - row['open'])
-    upper_wick = row['high'] - max(row['close'], row['open'])
-    lower_wick = min(row['close'], row['open']) - row['low']
-    if body < (upper_wick + lower_wick) * 0.3:
-        return "doji"
-    if row['close'] > row['open'] and body > upper_wick and body > lower_wick:
-        return "bullish"
-    if row['close'] < row['open'] and body > upper_wick and body > lower_wick:
-        return "bearish"
-    if row['close'] > row['open'] and lower_wick > 2 * body:
-        return "hammer"
-    if row['close'] < row['open'] and upper_wick > 2 * body:
-        return "shooting_star"
-    return None
-
-def get_volume_profile_info(df, bins=20):
+def determine_trend(df: pd.DataFrame, short_ema=20, long_ema=50):
     df = df.copy()
-    price_min = df['close'].min()
-    price_max = df['close'].max()
-    bin_edges = np.linspace(price_min, price_max, bins + 1)
-    df['price_bin'] = pd.cut(df['close'], bins=bin_edges)
-    volume_by_bin = df.groupby('price_bin', observed=False)['volume'].sum()
-    poc_bin = volume_by_bin.idxmax()
-    return poc_bin
+    df['ema_short'] = df['close'].ewm(span=short_ema).mean()
+    df['ema_long'] = df['close'].ewm(span=long_ema).mean()
+    if df['ema_short'].iloc[-1] > df['ema_long'].iloc[-1]:
+        return "up"
+    elif df['ema_short'].iloc[-1] < df['ema_long'].iloc[-1]:
+        return "down"
+    return "sideways"
+
+def identify_support_resistance(df, lookback=100):
+    highs = df['high'].tail(lookback)
+    lows = df['low'].tail(lookback)
+    resistance = highs.max()
+    support = lows.min()
+    return support, resistance
 
 def generate_trade_ideas(symbol, df, swing_mode=False):
-    df = df.copy() if isinstance(df, pd.DataFrame) else df
-
-    if swing_mode:
-        print(f"[SWING MODE] Анализ свинг-режима активирован для {symbol}")
-
-    df['ema_fast'] = EMAIndicator(df['close'], window=5).ema_indicator()
-    df['ema_slow'] = EMAIndicator(df['close'], window=20).ema_indicator()
-    df['macd'] = MACD(df['close']).macd_diff()
-    df['rsi'] = RSIIndicator(df['close']).rsi()
-    df['stochrsi'] = StochRSIIndicator(df['close']).stochrsi_k()
-    df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
-    df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-    df['bb_bbm'] = BollingerBands(df['close'], window=20).bollinger_mavg()
-    df['bb_bbh'] = BollingerBands(df['close'], window=20).bollinger_hband()
-    df['bb_bbl'] = BollingerBands(df['close'], window=20).bollinger_lband()
-    df['vwap'] = (df['close'] * df['volume']).cumsum() / df['volume'].cumsum()
-    df['pattern'] = df.apply(detect_candle_pattern, axis=1)
-    df['obv'] = calculate_obv(df)
-    df = compute_vumanchu(df)
-
-
-    hl2 = (df['high'] + df['low']) / 2
-    atr = df['atr']
-    df['upper_band'] = hl2 + 3 * atr
-    df['lower_band'] = hl2 - 3 * atr
-    df['supertrend'] = True
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] > df['upper_band'].iloc[i - 1]:
-            df.at[df.index[i], 'supertrend'] = True
-        elif df['close'].iloc[i] < df['lower_band'].iloc[i - 1]:
-            df.at[df.index[i], 'supertrend'] = False
-        else:
-            df.at[df.index[i], 'supertrend'] = df['supertrend'].iloc[i - 1]
-
     try:
-        last = df.iloc[-1]
-        score = 0
-        reasons = []
-
-        if last['ema_fast'] > last['ema_slow']:
-            score += 1
-            reasons.append("EMA указывает на восходящий тренд")
-        else:
-            score -= 1
-            reasons.append("EMA указывает на нисходящий тренд")
-
-        if last['macd'] > 0:
-            score += 1
-            reasons.append("MACD положительный")
-        else:
-            score -= 1
-            reasons.append("MACD отрицательный")
-
-        if 50 < last['rsi'] < 70:
-            score += 1
-            reasons.append("RSI в бычьей зоне")
-        elif last['rsi'] < 30:
-            score -= 1
-            reasons.append("RSI в перепроданности")
-
-        if last['adx'] > 20:
-            score += 1
-            reasons.append("Сильный тренд по ADX")
-
-        if last['close'] > last['vwap']:
-            score += 1
-            reasons.append("Цена выше VWAP")
-        else:
-            score -= 1
-            reasons.append("Цена ниже VWAP")
-
-        if last['close'] < last['bb_bbl']:
-            score += 1
-            reasons.append("Цена ниже Bollinger — перепроданность")
-        elif last['close'] > last['bb_bbh']:
-            score -= 1
-            reasons.append("Цена выше Bollinger — перекупленность")
-
-        if df['obv'].diff().iloc[-1] > 0:
-            score += 1
-            reasons.append("OBV растёт")
-        else:
-            score -= 1
-            reasons.append("OBV падает")
-
-        if last['supertrend']:
-            score += 1
-            reasons.append("Supertrend в лонг")
-        else:
-            score -= 1
-            reasons.append("Supertrend в шорт")
-
-        if last['pattern']:
-            score += 1
-            reasons.append(f"Паттерн: {last['pattern']}")
-
-        poc_bin = get_volume_profile_info(df.tail(50))
-        poc_center = (poc_bin.left + poc_bin.right) / 2
-        if last['close'] > poc_center:
-            score += 1
-            reasons.append("Цена выше объёмной зоны")
-        else:
-            score -= 1
-            reasons.append("Цена ниже объёмной зоны")
-        
-        # --- VUMANCHU ---
-        if last["cipher_score"] > 2:
-            score += 1
-            reasons.append("VuManChu: Bullish signal")
-        elif last["cipher_score"] < -2:
-            score -= 1
-            reasons.append("VuManChu: Bearish signal")
-        else:
-            reasons.append("VuManChu: Neutral")
-
-        if last['bullish_div']:
-            score += 1
-            reasons.append("Bullish divergence (RSI)")
-        elif last['bearish_div']:
-            score -= 1
-            reasons.append("Bearish divergence (RSI)")
-        if abs(score) < 2:
+        if df.attrs.get("timeframe", "") == "1m":
+            print(f"[ℹ️] Пропущен сигнал по {symbol} (таймфрейм 1m).")
             return None
 
-        direction = "Long" if score > 0 else "Short"
-        confidence = "Very High" if abs(score) > 5 else "High" if abs(score) > 3 else "Medium"
+        df = df.copy()
 
-        formatted_reasons = "\n".join([f"- {r}" for r in reasons])
-        prompt = (
-            f"Символ: {symbol}\n"
-            f"Цена: {last['close']:.2f}\n"
-            f"Показатели:\n{formatted_reasons}\n\n"
-            f"Сделка планируется в направлении: {direction}.\n"
-            f"Подтверди, коротко, стоит ли открывать позицию или лучше воздержаться? Ответь в 1-2 строках."
-        )
-        ai_result = get_openai_analysis(prompt)
-        if ai_result:
-            short_ai = ai_result.strip().split(". ")[0][:120]
-            reasons.append(f"AI: {short_ai}")
-            if "покупку" in ai_result.lower():
-                score += 1
-            elif "продажу" in ai_result.lower():
-                score -= 1
+        # Индикаторы
+        df['atr'] = AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+        df['rsi'] = RSIIndicator(df['close']).rsi()
+        macd = MACD(df['close'])
+        df['macd'] = macd.macd()
+        df['macd_signal'] = macd.macd_signal()
+        df['adx'] = ADXIndicator(df['high'], df['low'], df['close']).adx()
+        bb = BollingerBands(df['close'])
+        df['bb_upper'] = bb.bollinger_hband()
+        df['bb_lower'] = bb.bollinger_lband()
 
-        entry = float(last['close'])
-        stop = entry - float(last['atr']) if direction == "Long" else entry + float(last['atr'])
-        target = entry + 2 * float(last['atr']) if direction == "Long" else entry - 2 * float(last['atr'])
+        trend_df = fetch_candles_for_symbol(symbol, interval="1h")
+        trend = determine_trend(trend_df) if not trend_df.empty else "unknown"
+        support, resistance = identify_support_resistance(df)
 
-        log_signal({
-            "symbol": symbol,
-            "direction": direction,
-            "entry": round(entry, 2),
-            "stop_loss": round(stop, 4),
-            "take_profit": round(target, 4),
+        last = df.iloc[-1]
+        direction = "long" if last['close'] >= last['open'] * 0.998 else "short"
+        buffer = 0.5 * last['atr']
+
+        if direction == "long":
+            stop_loss = support - buffer
+            take_profit = last['close'] + 3.5 * last['atr']
+        else:
+            stop_loss = resistance + buffer
+            take_profit = last['close'] - 3.5 * last['atr']
+
+        rr = abs(take_profit - last['close']) / abs(last['close'] - stop_loss)
+
+        # Фильтрация
+        if rr < 2.5:
+            raise ValueError("RR слишком низкий")
+        if last['adx'] <= 25:
+            raise ValueError("ADX слабый")
+        if (direction == "long" and last['rsi'] >= 30) or (direction == "short" and last['rsi'] <= 70):
+            raise ValueError("RSI не подтверждает сигнал")
+        if (direction == "long" and last['macd'] <= last['macd_signal']) or (direction == "short" and last['macd'] >= last['macd_signal']):
+            raise ValueError("MACD не подтверждает сигнал")
+        if (direction == "long" and last['close'] > last['bb_lower']) or (direction == "short" and last['close'] < last['bb_upper']):
+            raise ValueError("Цена не у края канала")
+
+        confidence = "very high"
+        score = round(min(10, rr * 2), 2)
+        quality_score = rank_signal({
             "confidence": confidence,
             "score": score,
-            "reasons": "; ".join(reasons),
-        })
-        return {
+            "trend_strength": float(last['adx']),
+            "confirmation_count": 4,
+            "is_pending": False
+        }) * 100
+
+        result = {
             "symbol": symbol,
+            "entry": round(last['close'], 2),
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
             "direction": direction,
-            "entry": round(entry, 2),
-            "stop_loss": round(stop, 4),
-            "take_profit": round(target, 4),
             "confidence": confidence,
             "score": score,
-            "reasons": reasons
+            "signal_score": 4,
+            "quality_score": round(quality_score, 2),
+            "pending": False,
+            "weak": False,
+            "reasoning": f"Trend: {trend}, ADX strong, MACD + RSI confirm, near BB edge"
         }
 
+        result["ai_comment"] = get_openai_analysis(
+            symbol=symbol,
+            timeframe=df.attrs.get("timeframe", "?"),
+            trend=trend,
+            indicators=f"RSI: {round(last['rsi'], 1)}, MACD: {round(last['macd'], 3)} > Signal: {round(last['macd_signal'], 3)}, ADX: {round(last['adx'], 1)}",
+            reasoning=result["reasoning"],
+            entry=result["entry"],
+            stop_loss=result["stop_loss"],
+            take_profit=result["take_profit"],
+            direction=direction,
+            confidence=confidence,
+            score=score
+        )
+
+        # График (если получится)
+        try:
+            chart_path = plot_trade_signal(
+                df=df,
+                entry=result["entry"],
+                stop_loss=result["stop_loss"],
+                take_profit=result["take_profit"],
+                signal_type=direction,
+                symbol=symbol
+            )
+            result["chart_path"] = chart_path
+        except Exception as chart_err:
+            print(f"[❌] Ошибка при построении графика для {symbol}: {chart_err}")
+            result["chart_path"] = None
+
+        # ⏺️ Логгирование сигнала
+        result.update({
+            "timestamp": datetime.utcnow().isoformat(),
+            "symbol": symbol,
+            "timeframe": df.attrs.get("timeframe", "?"),
+            "direction": direction,
+            "entry": result["entry"],
+            "stop_loss": result["stop_loss"],
+            "take_profit": result["take_profit"],
+            "confidence": confidence,
+            "score": score,
+            "signal_score": 4,
+            "quality_score": round(quality_score, 2),
+            "weak": False,
+            "result": ""
+        })
+
+        log_signal(result)
+        return result
 
     except Exception as e:
-        print(f"[❌] Ошибка в generate_trade_ideas для {symbol}: {e}")
-        traceback.print_exc()
-        return None
+        print(f"[⚠️] Не найдено качественных сигналов для {symbol}, пробуем сгенерировать отложенный...")
+        return generate_pending_trade_ideas(symbol, df)
+
+# Обёртка
+def analyze_symbol(symbol, df, swing_mode=False):
+    return generate_trade_ideas(symbol, df, swing_mode)

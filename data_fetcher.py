@@ -26,23 +26,53 @@ def fetch_klines(symbol, interval, limit=1000):
 def fetch_candles_for_symbol(symbol, interval="5m", limit=1000):
     try:
         os.makedirs("candle_data", exist_ok=True)
+        local_df = load_candles(symbol, interval)
 
-        df = load_candles(symbol, interval)
-        if not df.empty:
-            last_time = pd.to_datetime(df['time'].max(), unit='ms')
-            if datetime.utcnow() - last_time < timedelta(minutes=5):
-                print(f"[📂] Используем локальные свечи для {symbol} ({interval})")
-                return df.tail(limit)
+        if not local_df.empty:
+            last_time = pd.to_datetime(local_df['time'].max(), unit='ms')
+            now = datetime.utcnow()
+            delta_minutes = int((now - last_time).total_seconds() / 60)
 
-        df = fetch_klines(symbol, interval, limit=limit)
-        print(f"[DEBUG] Получено {len(df)} строк")
-        if not df.empty:
-            save_candles(symbol, df, interval)
-            print(f"[🌐] Скачано и сохранено {len(df)} свечей для {symbol} ({interval})")
+            interval_map = {
+                "1m": 1,
+                "3m": 3,
+                "5m": 5,
+                "15m": 15,
+                "30m": 30,
+                "1h": 60,
+                "2h": 120,
+                "4h": 240,
+                "6h": 360,
+                "8h": 480,
+                "12h": 720,
+                "1d": 1440
+            }
+
+            tf_minutes = interval_map.get(interval, 5)
+            missing_bars = delta_minutes // tf_minutes
+
+            if missing_bars < 1:
+                print(f"[📂] Используем актуальные локальные свечи для {symbol} ({interval})")
+                return local_df.tail(limit)
+            else:
+                print(f"[🔄] Обнаружено {missing_bars} недостающих свечей для {symbol} ({interval})")
+                new_df = fetch_klines(symbol, interval, limit=min(missing_bars + 10, 1000))
+                if not new_df.empty:
+                    new_df = new_df[new_df['time'] > local_df['time'].max()]
+                    if not new_df.empty:
+                        updated_df = pd.concat([local_df, new_df], ignore_index=True)
+                        save_candles(symbol, updated_df, interval)
+                        print(f"[✅] Добавлено {len(new_df)} новых свечей в {symbol} ({interval})")
+                        return updated_df.tail(limit)
+                return local_df.tail(limit)
         else:
-            print(f"[⚠️] Нет данных от Binance для {symbol} ({interval})")
-
-        return df
+            df = fetch_klines(symbol, interval, limit=limit)
+            if not df.empty:
+                save_candles(symbol, df, interval)
+                print(f"[🌐] Скачано и сохранено {len(df)} свечей для {symbol} ({interval})")
+            else:
+                print(f"[⚠️] Нет данных от Binance для {symbol} ({interval})")
+            return df
 
     except Exception as e:
         print(f"[❌] Ошибка в fetch_candles_for_symbol: {e}")
@@ -58,7 +88,7 @@ def fetch_all_intervals(symbols=None, intervals=None):
     for symbol in symbols:
         all_data[symbol] = {}
         for interval in intervals:
-            df = fetch_candles_for_symbol(symbol, interval)  # ✅ использует кэш
+            df = fetch_candles_for_symbol(symbol, interval)
             if not df.empty:
                 all_data[symbol][interval] = df
 
@@ -73,3 +103,7 @@ def fetch_all_intervals(symbols=None, intervals=None):
                 print(f"[✅] {sym} {tf}: Загружено {df_len} строк.")
 
     return all_data
+
+# Псевдоним для совместимости со старыми импортами
+def fetch_ohlcv_binance(symbol: str, timeframe="5m", limit=100):
+    return fetch_candles_for_symbol(symbol, interval=timeframe, limit=limit)

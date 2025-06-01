@@ -2,47 +2,39 @@ from telegram import Update
 from telegram.ext import ContextTypes
 from analyzer import run_scalp_analysis
 from formatting import format_signals_vertical
-import csv
-import os
+from utils.trade_logger import log_signal
+from data_fetcher import fetch_all_intervals
 from datetime import datetime
 
-# Основная команда для скальпинга BTC
+# 📈 Команда /scalp_btc — скальпинг BTC на основе 5m/15m свечей
 async def handle_scalp_btc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Указываем явно нужный символ и таймфреймы
-        symbol = "BTCUSDT"
-        summary_line, signals = await run_scalp_analysis(symbols=[symbol])
+        # 🔄 Предзагрузка необходимых таймфреймов
+        fetch_all_intervals(symbols=["BTCUSDT"], intervals=["1m", "5m", "15m"])
+
+        # 📊 Основной анализ
+        summary_line, signals = await run_scalp_analysis(symbols=["BTCUSDT"])
 
         if not signals or all(s is None for s in signals):
             await update.message.reply_text("⚠️ Сигналы не найдены.")
             return
 
         signals = [s for s in signals if s is not None]
-        formatted = format_signals_vertical(signals, strategy_name="скальпинг BTC")
+        formatted = format_signals_vertical(signals, strategy_name="Скальпинг BTC")
         await update.message.reply_text(f"{summary_line}\n\n{formatted}", parse_mode="HTML")
 
-        # === Логгирование сигналов ===
-        log_path = "logs/signal_log.csv"
-        os.makedirs("logs", exist_ok=True)
-        log_fields = ["timestamp", "symbol", "direction", "entry", "stop_loss", "take_profit", "confidence", "score", "reasons"]
-
+        # ✅ Логирование всех сигналов
         for signal in signals:
-            with open(log_path, mode='a', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=log_fields)
-                if file.tell() == 0:
-                    writer.writeheader()
-                writer.writerow({
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "symbol": signal["symbol"],
-                    "direction": signal["direction"],
-                    "entry": signal["entry"],
-                    "stop_loss": signal["stop_loss"],
-                    "take_profit": signal["take_profit"],
-                    "confidence": signal["confidence"],
-                    "score": signal["score"],
-                    "reasons": "; ".join(signal["reasons"]) if isinstance(signal["reasons"], list) else signal["reasons"]
-                })
+            signal.update({
+                "timestamp": signal.get("timestamp", datetime.utcnow().isoformat()),
+                "timeframe": signal.get("timeframe", "5m"),
+                "signal_score": signal.get("signal_score", 4),
+                "quality_score": signal.get("quality_score", 0),
+                "weak": signal.get("weak", False),
+                "result": signal.get("result", "")
+            })
+            log_signal(signal)
 
     except Exception as e:
         print(f"[❌] Ошибка в handle_scalp_btc: {e}")
-        await update.message.reply_text("❌ Ошибка при получении BTC-сигналов.")
+        await update.message.reply_text("❌ Ошибка при получении скальпинг-сигналов.")

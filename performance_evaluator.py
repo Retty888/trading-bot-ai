@@ -1,63 +1,58 @@
 import pandas as pd
 import os
-from utils.candle_storage import load_candles
-from datetime import datetime, timedelta
 
-LOG_DIR = "logs"
-SIGNAL_LOG = os.path.join(LOG_DIR, "signal_log.csv")
-os.makedirs(LOG_DIR, exist_ok=True)  # убедимся, что папка есть
-
-def evaluate_signal(row, candles):
-    direction = row['direction']
-    entry = float(row['entry'])
-    sl = float(row['stop_loss'])
-    tp = float(row['take_profit'])
-
-    for _, candle in candles.iterrows():
-        high = candle['high']
-        low = candle['low']
-
-        if direction == "Long":
-            if low <= sl:
-                return "SL"
-            if high >= tp:
-                return "TP"
-        elif direction == "Short":
-            if high >= sl:
-                return "SL"
-            if low <= tp:
-                return "TP"
-
-    return "Active"
+SIGNAL_LOG_PATH = "logs/signal_log.csv"
+STATS_OUTPUT_PATH = "logs/signal_stats.csv"
 
 def evaluate_all_signals():
-    try:
-        df = pd.read_csv(SIGNAL_LOG)
+    if not os.path.exists(SIGNAL_LOG_PATH):
+        return "⚠️ Лог сигналов не найден."
 
-        # Устанавливаем статус Unknown, если он отсутствует или пуст
-        if 'status' not in df.columns:
-            df['status'] = "Unknown"
-        else:
-            df['status'] = df['status'].fillna("Unknown").replace("", "Unknown")
+    df = pd.read_csv(SIGNAL_LOG_PATH)
 
-        for i, row in df.iterrows():
-            if row['status'] != "Unknown":
-                continue
+    # Проверка обязательных колонок
+    if "result" not in df.columns or "reasoning" not in df.columns:
+        return "⚠️ В логах отсутствуют нужные колонки (result / reasoning)."
 
-            symbol = row['symbol']
-            interval = "5m"
-            candles = load_candles(symbol, interval)
-            if candles.empty:
-                print(f"[⚠️] Нет свечей для {symbol}, оценка пропущена")
-                continue
+    # Приведение значений к единому формату
+    df["result"] = df["result"].astype(str).str.upper()
+    df = df[df["result"].isin(["TP", "SL"])]
+    df["successful"] = df["result"] == "TP"
 
-            status = evaluate_signal(row, candles)
-            df.at[i, 'status'] = status
-            print(f"[{symbol}] {row['direction']} @ {row['entry']} → {status}")
+    # Признаки для анализа
+    features = [
+        "EMA", "MACD", "RSI", "ADX", "VWAP", "OBV", 
+        "Supertrend", "Паттерн", "объёмной зоны"
+    ]
 
-        df.to_csv(SIGNAL_LOG, index=False)
-        print("✅ Обновление результатов сигналов завершено.")
+    stats = []
+    for feat in features:
+        subset = df[df["reasoning"].str.contains(feat, na=False)]
+        total = len(subset)
+        if total == 0:
+            continue
+        success_rate = subset["successful"].mean()
+        stats.append({
+            "feature": feat,
+            "signals": total,
+            "success_rate": round(success_rate * 100, 2)
+        })
 
-    except Exception as e:
-        print(f"❌ Ошибка при оценке сигналов: {e}")
+    if not stats:
+        return "⚠️ Нет данных для анализа признаков."
 
+    stats_df = pd.DataFrame(stats)
+    stats_df.sort_values(by="success_rate", ascending=False, inplace=True)
+
+    # Сохранение CSV
+    os.makedirs(os.path.dirname(STATS_OUTPUT_PATH), exist_ok=True)
+    stats_df.to_csv(STATS_OUTPUT_PATH, index=False)
+
+    # Форматированный вывод
+    message_lines = ["📊 <b>Статистика признаков</b>\n"]
+    for _, row in stats_df.iterrows():
+        message_lines.append(
+            f"• <b>{row['feature']}</b>: {row['success_rate']}% (из {row['signals']})"
+        )
+
+    return "\n".join(message_lines)
